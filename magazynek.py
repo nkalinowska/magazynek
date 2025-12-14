@@ -9,21 +9,24 @@ KLUCZ_MAGAZYNU = 'magazyn'
 KLUCZ_LAST_ACTIVITY = 'last_activity'
 
 # --- Inicjalizacja Stanu Sesji ---
+# UWAGA: Dodajemy klucz 'min_stock' do każdej partii, choć w praktyce powinien on być na poziomie produktu.
+# Dla uproszczenia i zachowania spójności partii, umieszczamy go tu.
 
 def inicjalizuj_stan_sesji():
-    """Inicjalizuje magazyn i czas aktywności w st.session_state."""
+    """Inicjalizuje magazyn, czas aktywności oraz domyślne stany minimalne."""
     if KLUCZ_MAGAZYNU not in st.session_state:
-        # Początkowe dane (Klucz: (Nazwa, Lokalizacja), Wartość: Lista Partii)
+        # Struktura: Klucz: (Nazwa, Lokalizacja), Wartość: Lista Partii
+        # W partii dodajemy 'min_stock', który będzie traktowany jako stan minimalny dla całego towaru.
         st.session_state[KLUCZ_MAGAZYNU]: Dict[Tuple[str, str], List[Dict[str, float]]] = {
             ("Laptop", "Regał A01"): [
-                {'ilosc': 10, 'cena': 2500.00},
-                {'ilosc': 5, 'cena': 2700.00}
+                {'ilosc': 10, 'cena': 2500.00, 'min_stock': 20}, # Min stock = 20
+                {'ilosc': 5, 'cena': 2700.00, 'min_stock': 20}
             ],
             ("Monitor", "Regał A01"): [
-                {'ilosc': 20, 'cena': 850.50}
+                {'ilosc': 20, 'cena': 850.50, 'min_stock': 25} # Min stock = 25
             ],
             ("Klawiatura", "Sektor B05"): [
-                {'ilosc': 50, 'cena': 150.00}
+                {'ilosc': 50, 'cena': 150.00, 'min_stock': 40} # Min stock = 40
             ]
         }
     
@@ -42,54 +45,55 @@ def sprawdz_wygasanie_sesji():
         st.session_state[KLUCZ_LAST_ACTIVITY] = czas_teraz
         st.error(f"⚠️ **Sesja Wygasła!** Brak aktywności przez ponad {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekund. Magazyn został zresetowany.")
     else:
-        st.session_state[KLUCZ_LAST_ACTIVITY] = czas_teraz
+        st.session_state[KLUCZ_LAST_ACTIVITY] = time.time() # Aktualizacja czasu aktywności
         czas_pozostaly = int(CZAS_WYGASANIA_SEKCJI_SEKUNDY - roznica_czasu)
         st.sidebar.info(f"Sesja wygaśnie za: **{max(0, czas_pozostaly)}** sekund.")
 
-# --- Funkcje Magazynowe (Operujące na st.session_state) ---
+# --- NOWA FUNKCJA GENEROWANIA ZAPOTRZEBOWANIA ---
 
-def zloz_zamowienie(nazwa: str, ilosc: int):
-    """Symuluje składanie zamówienia, sprawdzając dostępność w magazynie."""
+def generuj_zapotrzebowanie():
+    """Analizuje magazyn i generuje listę towarów wymagających domówienia (Poniżej Min Stock)."""
     
-    nazwa = nazwa.strip()
-
-    if not nazwa:
-        st.error("Wprowadź nazwę towaru, który chcesz zamówić.")
-        return
-
-    if ilosc <= 0:
-        st.error("Ilość musi być większa niż zero.")
-        return
-
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
     
-    # Oblicz sumę dostępnej ilości dla danej nazwy towaru, niezależnie od lokalizacji i partii
-    dostepna_ilosc = 0
-    # Iterujemy po kluczach (nazwa, lokalizacja)
-    for (item_name, _), partie in magazyn.items():
-        if item_name.lower() == nazwa.lower():
-            dostepna_ilosc += sum(p['ilosc'] for p in partie)
+    # Krok 1: Agregacja danych (suma ilości i min_stock dla unikalnych nazw)
+    agregacja: Dict[str, Dict[str, Any]] = {}
 
-    st.subheader("Wynik Sprawdzenia Dostępności")
-    st.markdown("---")
-    st.metric(label=f"Całkowita Dostępna Ilość dla {nazwa}", value=f"{dostepna_ilosc} szt.")
-
-    if dostepna_ilosc >= ilosc:
-        # Sukces: Towar dostępny
-        st.success(f"✅ Zamówienie na **{ilosc}** sztuk towaru **{nazwa}** jest **dostępne w magazynie** i może zostać zrealizowane natychmiast.")
-        st.info("Aby sfinalizować wydanie, przejdź do sekcji 'Usuń / Wydaj Towar (FIFO)'.")
-    else:
-        # Częściowa/Brak dostępności
-        brakujaca_ilosc = ilosc - dostepna_ilosc
-        st.warning(f"❌ Towar **{nazwa}** jest **niedostępny** w wystarczającej ilości.")
-        st.error(f"Wymagana ilość: {ilosc} szt. Dostępna ilość: {dostepna_ilosc} szt. **Wymagane domówienie: {brakujaca_ilosc} szt.**")
+    for (nazwa, _), partie in magazyn.items():
+        if not partie:
+            continue
+            
+        # Sumaryczna ilość
+        dostepna_ilosc = sum(p['ilosc'] for p in partie)
         
-    st.markdown("---")
-    
-# Pozostałe funkcje (dodaj i usun) pozostają bez zmian:
+        # Min stock jest brany z pierwszej partii (zakładamy, że jest taki sam dla wszystkich partii tego produktu)
+        min_stock = partie[0].get('min_stock', 0) 
+        
+        if nazwa not in agregacja:
+            agregacja[nazwa] = {'dostepna': 0, 'min_stock': min_stock}
+        
+        agregacja[nazwa]['dostepna'] += dostepna_ilosc
 
-def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float):
-    # ... (kod pozostaje bez zmian) ...
+    # Krok 2: Generowanie listy braków
+    lista_brakow = []
+    for nazwa, dane in agregacja.items():
+        if dane['dostepna'] < dane['min_stock']:
+            brak = dane['min_stock'] - dane['dostepna']
+            lista_brakow.append({
+                "Towar": nazwa,
+                "Stan Obecny": dane['dostepna'],
+                "Stan Minimalny": dane['min_stock'],
+                "Zapotrzebowanie (Braki)": brak
+            })
+    
+    return lista_brakow
+
+
+# --- Funkcje Magazynowe ---
+
+def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float, min_stock: int):
+    """Dodaje nową partię towaru z min_stock."""
+    
     nazwa = nazwa.strip()
     lokalizacja = lokalizacja.strip().upper() 
     
@@ -97,29 +101,27 @@ def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float):
         st.error("Wprowadź nazwę towaru i lokalizację.")
         return
 
-    if ilosc <= 0:
-        st.error("Ilość musi być większa niż zero.")
-        return
-    
-    if cena <= 0:
-        st.error("Cena musi być większa niż zero.")
+    if ilosc <= 0 or cena <= 0 or min_stock < 0:
+        st.error("Ilość, cena i min stock muszą być poprawnymi wartościami.")
         return
 
     klucz = (nazwa, lokalizacja)
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
     
-    nowa_partia = {'ilosc': ilosc, 'cena': round(cena, 2)}
+    # Dodanie min_stock do partii
+    nowa_partia = {'ilosc': ilosc, 'cena': round(cena, 2), 'min_stock': min_stock}
     
     if klucz not in magazyn:
         magazyn[klucz] = []
     
     magazyn[klucz].append(nowa_partia)
     
-    st.success(f"Przyjęto nową partię: **{nazwa}** ({ilosc} szt. @ {cena:.2f} PLN) na pozycji **{lokalizacja}**.")
+    st.success(f"Przyjęto nową partię: **{nazwa}** ({ilosc} szt. @ {cena:.2f} PLN) na pozycji **{lokalizacja}**. Min Stock ustawiono na: {min_stock}.")
 
 
 def usun_towar_z_lokalizacja(klucz: Tuple[str, str], ilosc_do_usuniecia: int):
-    # ... (kod pozostaje bez zmian) ...
+    """Usuwa podaną ilość towaru z danej lokalizacji (FIFO)."""
+    
     nazwa, lokalizacja = klucz
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
     
@@ -162,136 +164,139 @@ def usun_towar_z_lokalizacja(klucz: Tuple[str, str], ilosc_do_usuniecia: int):
 
 # --- Główny Interfejs Użytkownika Streamlit ---
 
-st.set_page_config(page_title="Magazyn z Zamówieniami i Wygasającą Sesją", layout="centered")
+st.set_page_config(page_title="Magazyn: Kontrola Zapasów", layout="wide") # Używamy wide layout
 
 inicjalizuj_stan_sesji()
 sprawdz_wygasanie_sesji() 
 
 MAGAZYN = st.session_state[KLUCZ_MAGAZYNU]
 
-st.title("🛒 System Zarządzania Magazynem (z Zamówieniami)")
-st.caption(f"Dane są utrzymywane dzięki `st.session_state`, ale resetują się po {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekundach bezczynności.")
+st.title("🏭 Kontrola Zapasów Magazynowych (Stock Replenishment)")
+st.caption(f"Dane są utrzymywane, ale resetują się po {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekundach bezczynności.")
 
-# --- Sekcja Dodawania Towaru ---
-st.header("➕ Dodaj / Przyjmij Nową Partię")
-with st.form(key='dodawanie_form'):
-    col1, col2 = st.columns(2)
-    with col1:
-        nowy_towar = st.text_input("Nazwa Towaru:", key="input_dodaj")
-    with col2:
-        lokalizacja_dodaj = st.text_input("Lokalizacja (np. Regał A01):", key="lokalizacja_dodaj")
+# --- KOLUMNY DLA OSZCZĘDNOŚCI MIEJSCA PIONOWEGO ---
+col_replenish, col_add_remove = st.columns([1, 1])
 
-    col3, col4 = st.columns(2)
-    with col3:
-        ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
-    with col4:
-        cena_dodaj = st.number_input("Cena jednostkowa (PLN):", min_value=0.01, value=100.00, step=0.01, key="cena_dodaj", format="%.2f")
+# ==============================================================================
+# LEWA KOLUMNA: Generowanie Zapotrzebowania (Zamówienie Stockowe)
+# ==============================================================================
+with col_replenish:
+    st.header("📈 Automatyczna Analiza Zapasów")
+    st.info("Generuje listę towarów poniżej Stanu Minimalnego (Min Stock). To jest Twoja lista zakupów/domówień.")
 
-    submit_button_dodaj = st.form_submit_button("Przyjmij Nową Partię do Magazynu")
+    lista_brakow = generuj_zapotrzebowanie()
 
-    if submit_button_dodaj:
-        dodaj_towar_z_partia(nowy_towar, ilosc_dodaj, lokalizacja_dodaj, cena_dodaj)
-
-st.markdown("---")
-
-# --- NOWA SEKCJA: Składanie Zamówień ---
-st.header("🛒 Złóż Zamówienie Klienta")
-st.info("Ta sekcja sprawdza sumaryczną dostępność towaru w całym magazynie. Nie modyfikuje stanów magazynowych.")
-
-with st.form(key='zamowienie_form'):
-    
-    # 1. Lista unikalnych nazw (do wyboru)
-    unikalne_nazwy = sorted(list(set(nazwa for (nazwa, _), _ in MAGAZYN.items())))
-    opcje_zamowienia = ["--- Wpisz własną nazwę ---"] + unikalne_nazwy
-    
-    col_order_1, col_order_2 = st.columns(2)
-    
-    with col_order_1:
-        wybor_nazwy = st.selectbox(
-            "Wybierz towar z magazynu:",
-            options=opcje_zamowienia,
-            key="select_zamow"
+    if lista_brakow:
+        st.subheader("⚠️ Wymagane Domy (Zapotrzebowanie):")
+        
+        # Wyświetlanie listy braków w tabeli
+        df_braki = st.dataframe(
+            lista_brakow, 
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Stan Obecny": st.column_config.ProgressColumn(
+                    "Stan Obecny",
+                    format="%f szt.",
+                    min_value=0,
+                    max_value=max(item['Stan Minimalny'] for item in lista_brakow)
+                )
+            }
         )
-    
-    # 2. Obsługa wyboru własnej nazwy
-    if wybor_nazwy == "--- Wpisz własną nazwę ---":
-        nazwa_zamowienia = st.text_input("Nazwa Towaru do zamówienia:", key="input_zamow_custom")
+        st.error(f"Znaleziono **{len(lista_brakow)}** pozycje poniżej minimum!")
     else:
-        nazwa_zamowienia = wybor_nazwy
+        st.success("Wszystkie towary utrzymują stan minimalny lub powyżej. Brak zapotrzebowania na ten moment.")
+
+# ==============================================================================
+# PRAWA KOLUMNA: Operacje Magazynowe (Dodaj / Usuń)
+# ==============================================================================
+with col_add_remove:
     
-    with col_order_2:
-        ilosc_zamowienia = st.number_input(
-            "Ilość sztuk do zamówienia:", 
-            min_value=1, 
-            value=1, 
-            step=1, 
-            key="ilosc_zamow"
-        )
+    st.header("➕ Przyjęcie Towaru i Definicja Min Stock")
+    with st.form(key='dodawanie_form'):
+        
+        # Wiersz 1
+        c1, c2 = st.columns(2)
+        with c1:
+            nowy_towar = st.text_input("Nazwa Towaru:", key="input_dodaj")
+        with c2:
+            lokalizacja_dodaj = st.text_input("Lokalizacja:", key="lokalizacja_dodaj")
 
-    submit_button_zamow = st.form_submit_button("Sprawdź Dostępność i Złóż Zamówienie")
+        # Wiersz 2
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
+        with c4:
+            cena_dodaj = st.number_input("Cena jedn. (PLN):", min_value=0.01, value=100.00, step=0.01, key="cena_dodaj", format="%.2f")
+        with c5:
+            # Nowe pole do wprowadzenia min stock
+            min_stock_dodaj = st.number_input("Stan Minimalny (Min Stock):", min_value=0, value=10, step=1, key="min_stock_dodaj")
 
-    if submit_button_zamow:
-        # Przekazujemy finalną nazwę i ilość do funkcji sprawdzającej
-        zloz_zamowienie(nazwa_zamowienia, ilosc_zamowienia)
+
+        submit_button_dodaj = st.form_submit_button("Przyjmij Nową Partię do Magazynu")
+
+        if submit_button_dodaj:
+            dodaj_towar_z_partia(nowy_towar, ilosc_dodaj, lokalizacja_dodaj, cena_dodaj, min_stock_dodaj)
+
+    st.markdown("---") # Separator wizualny
+    
+    st.header("➖ Wydanie Towaru (FIFO)")
+
+    if MAGAZYN:
+        with st.form(key='usuwanie_form'):
+            # --- Logika selectbox (bez zmian, działa stabilnie) ---
+            dostepne_klucze = sorted(MAGAZYN.keys())
+            opcje_do_wyboru = []
+            nazwa_do_klucza_map = {}
+            suma_ilosci = {} 
+            
+            for (nazwa, lokalizacja), partie in MAGAZYN.items():
+                ilosc_sumaryczna = sum(p['ilosc'] for p in partie)
+                if ilosc_sumaryczna > 0:
+                    czytelna_opcja = f"{nazwa} | {lokalizacja} (SUMA: {ilosc_sumaryczna} szt.)"
+                    opcje_do_wyboru.append(czytelna_opcja)
+                    nazwa_do_klucza_map[czytelna_opcja] = (nazwa, lokalizacja)
+                    suma_ilosci[(nazwa, lokalizacja)] = ilosc_sumaryczna
+
+            if not opcje_do_wyboru:
+                st.info("Brak towaru do wydania.")
+                st.stop()
+            
+            # Wiersz 3
+            c6, c7 = st.columns(2)
+            with c6:
+                wybrana_opcja = st.selectbox(
+                    "Wybierz pozycję do wydania (Lokalizacja):",
+                    options=opcje_do_wyboru, 
+                    key="select_usun"
+                )
+            
+            klucz_do_usunięcia = nazwa_do_klucza_map[wybrana_opcja]
+            max_ilosc = suma_ilosci.get(klucz_do_usunięcia, 1)
+
+            with c7:
+                ilosc_usun = st.number_input(
+                    f"Ilość sztuk do wydania (Max: {max_ilosc}):",
+                    min_value=1,
+                    max_value=max_ilosc,
+                    value=1, 
+                    step=1, 
+                    key="ilosc_usun"
+                )
+
+            submit_button_usun = st.form_submit_button("Usuń / Wydaj z Magazynu")
+
+            if submit_button_usun:
+                usun_towar_z_lokalizacja(klucz_do_usunięcia, ilosc_usun)
+    else:
+        st.info("Magazyn jest pusty, operacja wydania niemożliwa.")
+
 
 st.markdown("---")
 
-# --- Sekcja Usuwania Towaru ---
-st.header("➖ Usuń / Wydaj Towar (FIFO)")
-if MAGAZYN:
-    
-    # 1. Przygotowanie kluczy i opcji do wyboru
-    dostepne_klucze = sorted(MAGAZYN.keys())
-    opcje_do_wyboru = []
-    nazwa_do_klucza_map = {}
-    suma_ilosci = {} 
-    
-    for (nazwa, lokalizacja), partie in MAGAZYN.items():
-        ilosc_sumaryczna = sum(p['ilosc'] for p in partie)
-        if ilosc_sumaryczna > 0:
-            czytelna_opcja = f"{nazwa} | {lokalizacja} (SUMA: {ilosc_sumaryczna} szt.)"
-            opcje_do_wyboru.append(czytelna_opcja)
-            nazwa_do_klucza_map[czytelna_opcja] = (nazwa, lokalizacja)
-            suma_ilosci[(nazwa, lokalizacja)] = ilosc_sumaryczna
-
-    if not opcje_do_wyboru:
-        st.info("Brak towaru w magazynie.")
-        st.stop()
-
-    with st.form(key='usuwanie_form'):
-        
-        col_remove_1, col_remove_2 = st.columns(2)
-
-        with col_remove_1:
-            wybrana_opcja = st.selectbox(
-                "Wybierz pozycję do wydania (Nazwa i Lokalizacja):",
-                options=opcje_do_wyboru, 
-                key="select_usun"
-            )
-        
-        klucz_do_usunięcia = nazwa_do_klucza_map[wybrana_opcja]
-        max_ilosc = suma_ilosci.get(klucz_do_usunięcia, 1)
-
-        with col_remove_2:
-            ilosc_usun = st.number_input(
-                f"Ilość sztuk do wydania (Max: {max_ilosc}):",
-                min_value=1,
-                max_value=max_ilosc,
-                value=1, 
-                step=1, 
-                key="ilosc_usun"
-            )
-
-        submit_button_usun = st.form_submit_button("Usuń / Wydaj z Magazynu")
-
-        if submit_button_usun:
-            usun_towar_z_lokalizacja(klucz_do_usunięcia, ilosc_usun)
-else:
-    st.info("Magazyn jest pusty, nic do usunięcia.")
-
-
-# --- Sekcja Aktualnego Stanu Magazynu (Szczegółowo) ---
+# --- Pełna Tabela Stanu Magazynu (Dół ekranu) ---
 st.header("📊 Szczegółowy Stan Magazynu (Partie)")
+st.info("Pełna lista wszystkich partii towarów z cenami i lokalizacjami.")
 
 if MAGAZYN:
     wszystkie_dane_tabela = []
@@ -303,9 +308,13 @@ if MAGAZYN:
                 "Lokalizacja": lokalizacja,
                 "Ilość Sztuk": partia['ilosc'],
                 "Cena Jednostkowa (PLN)": f"{partia['cena']:.2f}",
-                "Wartość Partii (PLN)": f"{partia['ilosc'] * partia['cena']:.2f}"
+                "Wartość Partii (PLN)": f"{partia['ilosc'] * partia['cena']:.2f}",
+                "Stan Minimalny": partia['min_stock']
             })
 
-    st.dataframe(wszystkie_dane_tabela, hide_index=True)
+    st.dataframe(wszystkie_dane_tabela, hide_index=True, use_container_width=True)
 else:
     st.info("Magazyn jest obecnie pusty.")
+
+st.markdown("---")
+st.caption("Wydawanie towaru odbywa się metodą FIFO (First-In, First-Out).")
