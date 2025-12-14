@@ -9,14 +9,11 @@ KLUCZ_MAGAZYNU = 'magazyn'
 KLUCZ_LAST_ACTIVITY = 'last_activity'
 
 # --- Inicjalizacja Stanu Sesji ---
-# UWAGA: Dodajemy klucz 'min_stock' do każdej partii, choć w praktyce powinien on być na poziomie produktu.
-# Dla uproszczenia i zachowania spójności partii, umieszczamy go tu.
 
 def inicjalizuj_stan_sesji():
     """Inicjalizuje magazyn, czas aktywności oraz domyślne stany minimalne."""
     if KLUCZ_MAGAZYNU not in st.session_state:
         # Struktura: Klucz: (Nazwa, Lokalizacja), Wartość: Lista Partii
-        # W partii dodajemy 'min_stock', który będzie traktowany jako stan minimalny dla całego towaru.
         st.session_state[KLUCZ_MAGAZYNU]: Dict[Tuple[str, str], List[Dict[str, float]]] = {
             ("Laptop", "Regał A01"): [
                 {'ilosc': 10, 'cena': 2500.00, 'min_stock': 20}, # Min stock = 20
@@ -45,11 +42,11 @@ def sprawdz_wygasanie_sesji():
         st.session_state[KLUCZ_LAST_ACTIVITY] = czas_teraz
         st.error(f"⚠️ **Sesja Wygasła!** Brak aktywności przez ponad {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekund. Magazyn został zresetowany.")
     else:
-        st.session_state[KLUCZ_LAST_ACTIVITY] = time.time() # Aktualizacja czasu aktywności
+        st.session_state[KLUCZ_LAST_ACTIVITY] = time.time() 
         czas_pozostaly = int(CZAS_WYGASANIA_SEKCJI_SEKUNDY - roznica_czasu)
         st.sidebar.info(f"Sesja wygaśnie za: **{max(0, czas_pozostaly)}** sekund.")
 
-# --- NOWA FUNKCJA GENEROWANIA ZAPOTRZEBOWANIA ---
+# --- NOWA FUNKCJA GENEROWANIA ZAPOTRZEBOWANIA (POPRWIONA) ---
 
 def generuj_zapotrzebowanie():
     """Analizuje magazyn i generuje listę towarów wymagających domówienia (Poniżej Min Stock)."""
@@ -63,16 +60,22 @@ def generuj_zapotrzebowanie():
         if not partie:
             continue
             
-        # Sumaryczna ilość
+        # Sumaryczna ilość z wszystkich partii w tej lokalizacji
         dostepna_ilosc = sum(p['ilosc'] for p in partie)
         
-        # Min stock jest brany z pierwszej partii (zakładamy, że jest taki sam dla wszystkich partii tego produktu)
-        min_stock = partie[0].get('min_stock', 0) 
+        # Min stock (zakładamy, że jest taki sam dla wszystkich partii/lokalizacji danego produktu)
+        min_stock_partii = partie[0].get('min_stock', 0)
         
         if nazwa not in agregacja:
-            agregacja[nazwa] = {'dostepna': 0, 'min_stock': min_stock}
+            agregacja[nazwa] = {'dostepna': 0, 'min_stock': min_stock_partii}
         
+        # Agregacja ilości
         agregacja[nazwa]['dostepna'] += dostepna_ilosc
+        
+        # Jeśli znajdziemy wyższy min_stock (w przypadku błędu użytkownika), użyjemy wyższego
+        if min_stock_partii > agregacja[nazwa]['min_stock']:
+             agregacja[nazwa]['min_stock'] = min_stock_partii
+            
 
     # Krok 2: Generowanie listy braków
     lista_brakow = []
@@ -89,7 +92,7 @@ def generuj_zapotrzebowanie():
     return lista_brakow
 
 
-# --- Funkcje Magazynowe ---
+# --- Funkcje Magazynowe (pozostały bez zmian, ale operują na min_stock) ---
 
 def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float, min_stock: int):
     """Dodaje nową partię towaru z min_stock."""
@@ -164,7 +167,7 @@ def usun_towar_z_lokalizacja(klucz: Tuple[str, str], ilosc_do_usuniecia: int):
 
 # --- Główny Interfejs Użytkownika Streamlit ---
 
-st.set_page_config(page_title="Magazyn: Kontrola Zapasów", layout="wide") # Używamy wide layout
+st.set_page_config(page_title="Magazyn: Kontrola Zapasów", layout="wide")
 
 inicjalizuj_stan_sesji()
 sprawdz_wygasanie_sesji() 
@@ -189,7 +192,9 @@ with col_replenish:
     if lista_brakow:
         st.subheader("⚠️ Wymagane Domy (Zapotrzebowanie):")
         
-        # Wyświetlanie listy braków w tabeli
+        # Znalezienie maksymalnej wartości Min Stock dla poprawnej wizualizacji paska
+        max_min_stock = max(item['Stan Minimalny'] for item in lista_brakow) if lista_brakow else 1
+        
         df_braki = st.dataframe(
             lista_brakow, 
             hide_index=True,
@@ -199,7 +204,8 @@ with col_replenish:
                     "Stan Obecny",
                     format="%f szt.",
                     min_value=0,
-                    max_value=max(item['Stan Minimalny'] for item in lista_brakow)
+                    # Używamy max_min_stock, aby pasek wypełniał się do poziomu minimalnego
+                    max_value=max_min_stock 
                 )
             }
         )
@@ -229,7 +235,6 @@ with col_add_remove:
         with c4:
             cena_dodaj = st.number_input("Cena jedn. (PLN):", min_value=0.01, value=100.00, step=0.01, key="cena_dodaj", format="%.2f")
         with c5:
-            # Nowe pole do wprowadzenia min stock
             min_stock_dodaj = st.number_input("Stan Minimalny (Min Stock):", min_value=0, value=10, step=1, key="min_stock_dodaj")
 
 
@@ -238,13 +243,13 @@ with col_add_remove:
         if submit_button_dodaj:
             dodaj_towar_z_partia(nowy_towar, ilosc_dodaj, lokalizacja_dodaj, cena_dodaj, min_stock_dodaj)
 
-    st.markdown("---") # Separator wizualny
+    st.markdown("---") 
     
     st.header("➖ Wydanie Towaru (FIFO)")
 
     if MAGAZYN:
         with st.form(key='usuwanie_form'):
-            # --- Logika selectbox (bez zmian, działa stabilnie) ---
+            
             dostepne_klucze = sorted(MAGAZYN.keys())
             opcje_do_wyboru = []
             nazwa_do_klucza_map = {}
@@ -262,7 +267,6 @@ with col_add_remove:
                 st.info("Brak towaru do wydania.")
                 st.stop()
             
-            # Wiersz 3
             c6, c7 = st.columns(2)
             with c6:
                 wybrana_opcja = st.selectbox(
