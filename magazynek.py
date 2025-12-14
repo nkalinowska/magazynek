@@ -1,43 +1,74 @@
 import streamlit as st
 
-# Lista towarów
-towary = []
+# --- Globalna lista magazynu (pamiętaj: resetowana przy każdej interakcji/odświeżeniu!) ---
+# W realnej aplikacji Streamlit użyłbyś st.session_state, ale zgodnie z prośbą, pomijamy to.
+# Do celów demonstracyjnych, inicjujemy ją z kilkoma elementami.
+MAGAZYN = ["Laptop", "Monitor", "Klawiatura"]
 
-# Funkcja do dodawania towaru
 def dodaj_towar(nazwa):
-    if nazwa not in towary:
-        towary.append(nazwa)
-        st.success(f'Towar "{nazwa}" został dodany.')
+    """Dodaje towar do listy MAGAZYN."""
+    if nazwa and nazwa not in MAGAZYN:
+        MAGAZYN.append(nazwa)
+        st.success(f"Dodano: **{nazwa}**")
+    elif nazwa in MAGAZYN:
+        st.warning(f"Towar **{nazwa}** jest już w magazynie!")
     else:
-        st.warning(f'Towar "{nazwa}" już znajduje się na liście.')
+        st.error("Wprowadź nazwę towaru.")
 
-# Funkcja do usuwania towaru
 def usun_towar(nazwa):
-    if nazwa in towary:
-        towary.remove(nazwa)
-        st.success(f'Towar "{nazwa}" został usunięty.')
-    else:
-        st.warning(f'Towar "{nazwa}" nie znajduje się na liście.')
+    """Usuwa towar z listy MAGAZYN."""
+    try:
+        MAGAZYN.remove(nazwa)
+        st.success(f"Usunięto: **{nazwa}**")
+    except ValueError:
+        st.error(f"Towar **{nazwa}** nie został znaleziony w magazynie.")
 
-# Strona aplikacji
-st.title('Prosty Magazyn')
+# --- Interfejs użytkownika Streamlit ---
 
-# Wyświetlanie dostępnych towarów
-st.subheader('Lista towarów:')
-if towary:
-    st.write(', '.join(towary))
+st.set_page_config(page_title="Prosty Magazyn (Streamlit)", layout="centered")
+
+st.title("📦 Prosty Magazyn")
+st.caption("Aplikacja demonstracyjna bez użycia st.session_state ani zapisu danych.")
+
+# --- Sekcja Dodawania Towaru ---
+st.header("➕ Dodaj Towar")
+with st.form(key='dodawanie_form'):
+    nowy_towar = st.text_input("Nazwa Towaru do dodania:", key="input_dodaj")
+    submit_button_dodaj = st.form_submit_button("Dodaj do Magazynu")
+
+    if submit_button_dodaj:
+        # Streamlit wywołuje funkcję dodaj_towar
+        dodaj_towar(nowy_towar)
+
+
+# --- Sekcja Usuwania Towaru ---
+st.header("➖ Usuń Towar")
+if MAGAZYN:
+    # Używamy selectbox do wyboru towaru do usunięcia
+    towar_do_usunięcia = st.selectbox(
+        "Wybierz Towar do usunięcia:",
+        options=MAGAZYN,
+        key="select_usun"
+    )
+
+    if st.button("Usuń z Magazynu", key="button_usun"):
+        # Streamlit wywołuje funkcję usun_towar
+        usun_towar(towar_do_usunięcia)
 else:
-    st.write('Brak towarów w magazynie.')
+    st.info("Magazyn jest pusty, nic do usunięcia.")
 
-# Dodawanie towaru
-nowy_towar = st.text_input('Podaj nazwę towaru do dodania:')
-if st.button('Dodaj towar') and nowy_towar:
-    dodaj_towar(nowy_towar)
 
-# Usuwanie towaru
-towar_do_usuniecia = st.text_input('Podaj nazwę towaru do usunięcia:')
-if st.button('Usuń towar') and towar_do_usuniecia:
-    usun_towar(towar_do_usuniecia)
+# --- Sekcja Aktualnego Stanu Magazynu ---
+st.header("📊 Aktualny Stan Magazynu")
 
-# Dodanie instrukcji
-st.info('Użyj pola tekstowego, aby dodać lub usunąć towar z listy magazynu.')
+if MAGAZYN:
+    st.write(f"Liczba pozycji: **{len(MAGAZYN)}**")
+    # Wyświetlanie listy w formie listy punktowej
+    st.markdown("#### Lista Towarów:")
+    magazyn_list_markdown = "\n".join([f"* {towar}" for towar in MAGAZYN])
+    st.markdown(magazyn_list_markdown)
+else:
+    st.info("Magazyn jest obecnie pusty.")
+
+st.markdown("---")
+st.info("💡 **Uwaga:** Ze względu na brak zapisu sesji/danych, lista jest resetowana przy każdym przeładowaniu strony lub interakcji powodującej ponowne uruchomienie skryptu.")
