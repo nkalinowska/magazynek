@@ -1,62 +1,69 @@
 import streamlit as st
-from typing import Dict, Union
+from typing import Dict, Tuple
 
-# --- Globalny Słownik Magazynu (Nazwa Towaru: Ilość) ---
-# Uwaga: Nadal resetowany przy każdej interakcji/odświeżeniu, ponieważ nie używamy st.session_state.
-MAGAZYN: Dict[str, int] = {
-    "Laptop": 10,
-    "Monitor": 5,
-    "Klawiatura": 25
+# --- Globalny Słownik Magazynu (Klucz: (Nazwa Towaru, Lokalizacja), Wartość: Ilość) ---
+# Uwaga: Nadal resetowany przy każdej interakcji/odświeżeniu.
+MAGAZYN: Dict[Tuple[str, str], int] = {
+    ("Laptop", "Regał A01"): 10,
+    ("Monitor", "Regał A01"): 5,
+    ("Klawiatura", "Sektor B05"): 25,
+    ("Myszka", "Regał A01"): 15 # Dwa różne towary w tej samej lokalizacji
 }
 
-def dodaj_towar_z_ilosc(nazwa: str, ilosc: int):
-    """Dodaje lub aktualizuje towar wraz z podaną ilością."""
-    if not nazwa:
-        st.error("Wprowadź nazwę towaru.")
+def dodaj_towar_z_ilosc_i_lokalizacja(nazwa: str, ilosc: int, lokalizacja: str):
+    """Dodaje lub aktualizuje towar wraz z podaną ilością i lokalizacją."""
+    
+    # Normalizacja danych wejściowych
+    nazwa = nazwa.strip()
+    lokalizacja = lokalizacja.strip().upper() # Lokalizacje zapisujemy dużymi literami
+    
+    if not nazwa or not lokalizacja:
+        st.error("Wprowadź zarówno nazwę towaru, jak i lokalizację.")
         return
 
     if ilosc <= 0:
         st.error("Ilość musi być większa niż zero.")
         return
 
-    if nazwa in MAGAZYN:
-        MAGAZYN[nazwa] += ilosc
-        st.success(f"Zaktualizowano: Dodano **{ilosc}** sztuk towaru **{nazwa}**. Nowa ilość: **{MAGAZYN[nazwa]}**.")
+    klucz = (nazwa, lokalizacja)
+    
+    if klucz in MAGAZYN:
+        MAGAZYN[klucz] += ilosc
+        st.success(f"Zaktualizowano: Dodano **{ilosc}** sztuk towaru **{nazwa}** w **{lokalizacja}**. Nowa ilość: **{MAGAZYN[klucz]}**.")
     else:
-        MAGAZYN[nazwa] = ilosc
-        st.success(f"Nowy towar dodany: **{nazwa}** w ilości **{ilosc}** sztuk.")
+        MAGAZYN[klucz] = ilosc
+        st.success(f"Nowy towar dodany: **{nazwa}** w ilości **{ilosc}** sztuk, na pozycji **{lokalizacja}**.")
 
-def usun_towar_z_ilosc(nazwa: str, ilosc: int):
-    """Usuwa podaną ilość towaru lub usuwa cały towar, jeśli ilość jest zbyt duża."""
-    if not nazwa:
-        st.error("Wybierz nazwę towaru do usunięcia.")
-        return
-
+def usun_towar_z_ilosc_i_lokalizacja(klucz: Tuple[str, str], ilosc: int):
+    """Usuwa podaną ilość towaru z danej lokalizacji."""
+    
+    nazwa, lokalizacja = klucz
+    
     if ilosc <= 0:
         st.error("Ilość do usunięcia musi być większa niż zero.")
         return
 
-    if nazwa not in MAGAZYN:
-        st.error(f"Towar **{nazwa}** nie został znaleziony w magazynie.")
+    if klucz not in MAGAZYN:
+        st.error(f"Towar **{nazwa}** na pozycji **{lokalizacja}** nie został znaleziony w magazynie.")
         return
 
-    obecna_ilosc = MAGAZYN[nazwa]
+    obecna_ilosc = MAGAZYN[klucz]
 
     if ilosc >= obecna_ilosc:
-        # Usuń cały wpis, jeśli usuwana ilość jest większa lub równa obecnej
-        del MAGAZYN[nazwa]
-        st.success(f"Usunięto cały zapas towaru **{nazwa}** (usunięto **{obecna_ilosc}** sztuk).")
+        # Usuń cały wpis
+        del MAGAZYN[klucz]
+        st.success(f"Usunięto cały zapas towaru **{nazwa}** z **{lokalizacja}** (usunięto **{obecna_ilosc}** sztuk).")
     else:
         # Zmniejsz ilość
-        MAGAZYN[nazwa] -= ilosc
-        st.success(f"Usunięto **{ilosc}** sztuk towaru **{nazwa}**. Pozostało: **{MAGAZYN[nazwa]}**.")
+        MAGAZYN[klucz] -= ilosc
+        st.success(f"Usunięto **{ilosc}** sztuk towaru **{nazwa}** z **{lokalizacja}**. Pozostało: **{MAGAZYN[klucz]}**.")
 
 # --- Interfejs użytkownika Streamlit ---
 
-st.set_page_config(page_title="Prosty Magazyn z Ilościami (Streamlit)", layout="centered")
+st.set_page_config(page_title="Magazyn z Lokalizacją (Streamlit)", layout="centered")
 
-st.title("📦 Prosty Magazyn (z Ilościami)")
-st.caption("Aplikacja demonstracyjna bez użycia st.session_state.")
+st.title("🗺️ Magazyn z Lokalizacją i Ilościami")
+st.caption("Klucz Magazynu: (Nazwa Towaru, Lokalizacja). Aplikacja demonstracyjna bez użycia st.session_state.")
 
 # --- Sekcja Dodawania Towaru ---
 st.header("➕ Dodaj / Przyjmij Towar")
@@ -65,48 +72,54 @@ with st.form(key='dodawanie_form'):
     with col1:
         nowy_towar = st.text_input("Nazwa Towaru:", key="input_dodaj")
     with col2:
-        ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
+        lokalizacja_dodaj = st.text_input("Lokalizacja (np. Regał A01):", key="lokalizacja_dodaj")
+
+    ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
 
     submit_button_dodaj = st.form_submit_button("Dodaj / Przyjmij do Magazynu")
 
     if submit_button_dodaj:
-        dodaj_towar_z_ilosc(nowy_towar, ilosc_dodaj)
+        dodaj_towar_z_ilosc_i_lokalizacja(nowy_towar, ilosc_dodaj, lokalizacja_dodaj)
 
 
 # --- Sekcja Usuwania Towaru ---
 st.header("➖ Usuń / Wydaj Towar")
 if MAGAZYN:
     with st.form(key='usuwanie_form'):
-        # Sortujemy klucze (nazwy towarów) dla przejrzystości
-        dostepne_towary = sorted(MAGAZYN.keys())
+        # Tworzymy czytelną listę opcji do wyboru w selectbox: "Nazwa Towaru | Lokalizacja (Ilość)"
+        dostepne_klucze_sorted = sorted(MAGAZYN.keys())
+        opcje_do_wyboru = [
+            f"{nazwa} | {lokalizacja} ({ilosc} szt.)"
+            for (nazwa, lokalizacja), ilosc in MAGAZYN.items()
+        ]
         
-        col3, col4 = st.columns(2)
-        with col3:
-            # Używamy selectbox do wyboru towaru do usunięcia
-            towar_do_usunięcia = st.selectbox(
-                "Wybierz Towar do wydania:",
-                options=dostepne_towary,
-                key="select_usun"
-            )
+        # Streamlit potrzebuje listy kluczy do wewnętrznego mapowania, ale wyświetla opcje_do_wyboru
+        indeks_wyboru = st.selectbox(
+            "Wybierz pozycję do wydania (Nazwa i Lokalizacja):",
+            options=range(len(opcje_do_wyboru)),
+            format_func=lambda i: opcje_do_wyboru[i], # Użycie format_func do wyświetlenia czytelnej opcji
+            key="select_usun"
+        )
         
-        # Obliczenie maksymalnej ilości do usunięcia dla wybranego towaru
-        max_ilosc = MAGAZYN.get(towar_do_usunięcia, 1)
+        # Pobieramy faktyczny klucz (nazwa, lokalizacja) na podstawie wybranego indeksu
+        klucz_do_usunięcia = dostepne_klucze_sorted[indeks_wyboru]
+        
+        # Obliczenie maksymalnej ilości do usunięcia dla wybranego klucza
+        max_ilosc = MAGAZYN.get(klucz_do_usunięcia, 1)
 
-        with col4:
-            ilosc_usun = st.number_input(
-                "Ilość sztuk do wydania:",
-                min_value=1,
-                max_value=max_ilosc, # Ograniczenie do faktycznej ilości
-                value=1, 
-                step=1, 
-                key="ilosc_usun"
-            )
+        ilosc_usun = st.number_input(
+            f"Ilość sztuk do wydania (Max: {max_ilosc}):",
+            min_value=1,
+            max_value=max_ilosc,
+            value=1, 
+            step=1, 
+            key="ilosc_usun"
+        )
 
         submit_button_usun = st.form_submit_button("Usuń / Wydaj z Magazynu")
 
         if submit_button_usun:
-            # Wywołujemy funkcję usuwającą
-            usun_towar_z_ilosc(towar_do_usunięcia, ilosc_usun)
+            usun_towar_z_ilosc_i_lokalizacja(klucz_do_usunięcia, ilosc_usun)
 else:
     st.info("Magazyn jest pusty, nic do usunięcia.")
 
@@ -115,18 +128,17 @@ else:
 st.header("📊 Aktualny Stan Magazynu")
 
 if MAGAZYN:
-    st.write(f"Liczba unikalnych pozycji: **{len(MAGAZYN)}**")
+    st.write(f"Liczba unikalnych pozycji (towar + lokalizacja): **{len(MAGAZYN)}**")
     
     # Przygotowanie danych do wyświetlenia w tabeli
     dane_tabela = [
-        {"Nazwa Towaru": nazwa, "Ilość Sztuk": ilosc} 
-        for nazwa, ilosc in sorted(MAGAZYN.items())
+        {"Nazwa Towaru": nazwa, "Lokalizacja": lokalizacja, "Ilość Sztuk": ilosc} 
+        for (nazwa, lokalizacja), ilosc in sorted(MAGAZYN.items())
     ]
     
-    # Wyświetlanie słownika jako przejrzystej tabeli
     st.dataframe(dane_tabela, hide_index=True)
 else:
     st.info("Magazyn jest obecnie pusty.")
 
 st.markdown("---")
-st.warning("💡 **Kluczowa Uwaga:** Zgodnie z prośbą, ten magazyn jest implementowany bez zapisywania stanu (bez `st.session_state`). Oznacza to, że **wszelkie zmiany (dodanie/usunięcie) zostaną zresetowane**, gdy tylko aplikacja przeładuje się po interakcji lub odświeżeniu strony.")
+st.warning("💡 **Kluczowa Uwaga:** Magazyn wciąż nie zapisuje stanu (bez `st.session_state`). Wszelkie zmiany zostaną zresetowane po przeładowaniu strony lub interakcji.")
