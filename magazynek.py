@@ -1,10 +1,9 @@
 import streamlit as st
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, Any
 import time
-import datetime
+import math
 
 # --- Konfiguracja Wygasania Sesji ---
-# 120 sekund = 2 minuty
 CZAS_WYGASANIA_SEKCJI_SEKUNDY = 120
 KLUCZ_MAGAZYNU = 'magazyn'
 KLUCZ_LAST_ACTIVITY = 'last_activity'
@@ -14,15 +13,18 @@ KLUCZ_LAST_ACTIVITY = 'last_activity'
 def inicjalizuj_stan_sesji():
     """Inicjalizuje magazyn i czas aktywności w st.session_state."""
     if KLUCZ_MAGAZYNU not in st.session_state:
-        # Początkowe dane (tworzone tylko raz)
-        st.session_state[KLUCZ_MAGAZYNU]: Dict[Tuple[str, str], int] = {
-            ("Laptop", "Regał A01"): 10,
-            ("Monitor", "Regał A01"): 5,
-            ("Klawiatura", "Sektor B05"): 25
+        # Początkowe dane (Klucz: (Nazwa, Lokalizacja), Wartość: Lista Partii)
+        st.session_state[KLUCZ_MAGAZYNU]: Dict[Tuple[str, str], List[Dict[str, float]]] = {
+            ("Laptop", "Regał A01"): [
+                {'ilosc': 10, 'cena': 2500.00},
+                {'ilosc': 5, 'cena': 2700.00}
+            ],
+            ("Monitor", "Regał A01"): [
+                {'ilosc': 20, 'cena': 850.50}
+            ]
         }
     
     if KLUCZ_LAST_ACTIVITY not in st.session_state:
-        # Zapisz obecny czas jako czas ostatniej aktywności
         st.session_state[KLUCZ_LAST_ACTIVITY] = time.time()
 
 def sprawdz_wygasanie_sesji():
@@ -30,90 +32,115 @@ def sprawdz_wygasanie_sesji():
     
     czas_teraz = time.time()
     czas_ostatniej_aktywnosci = st.session_state.get(KLUCZ_LAST_ACTIVITY, czas_teraz)
-    
-    # Obliczanie różnicy w sekundach
     roznica_czasu = czas_teraz - czas_ostatniej_aktywnosci
     
     if roznica_czasu > CZAS_WYGASANIA_SEKCJI_SEKUNDY:
-        # Sesja wygasła! Resetujemy magazyn i czas
         st.session_state[KLUCZ_MAGAZYNU] = {}
         st.session_state[KLUCZ_LAST_ACTIVITY] = czas_teraz
         st.error(f"⚠️ **Sesja Wygasła!** Brak aktywności przez ponad {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekund. Magazyn został zresetowany.")
     else:
-        # Aktualizujemy czas ostatniej aktywności przy każdym przebiegu skryptu Streamlit
         st.session_state[KLUCZ_LAST_ACTIVITY] = czas_teraz
-        
-        # Wyświetlanie pozostałego czasu (dla dewelopera)
         czas_pozostaly = int(CZAS_WYGASANIA_SEKCJI_SEKUNDY - roznica_czasu)
         st.sidebar.info(f"Sesja wygaśnie za: **{max(0, czas_pozostaly)}** sekund.")
 
 
 # --- Funkcje Magazynowe (Operujące na st.session_state) ---
 
-def dodaj_towar_z_ilosc_i_lokalizacja(nazwa: str, ilosc: int, lokalizacja: str):
-    """Dodaje lub aktualizuje towar wraz z podaną ilością i lokalizacją."""
+def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float):
+    """Dodaje nową partię towaru (ilość i cenę) do magazynu."""
     
     nazwa = nazwa.strip()
     lokalizacja = lokalizacja.strip().upper() 
     
     if not nazwa or not lokalizacja:
-        st.error("Wprowadź zarówno nazwę towaru, jak i lokalizację.")
+        st.error("Wprowadź nazwę towaru i lokalizację.")
         return
 
     if ilosc <= 0:
         st.error("Ilość musi być większa niż zero.")
         return
+    
+    if cena <= 0:
+        st.error("Cena musi być większa niż zero.")
+        return
 
     klucz = (nazwa, lokalizacja)
-    
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
+    
+    nowa_partia = {'ilosc': ilosc, 'cena': round(cena, 2)} # Zaokrąglenie ceny
+    
+    if klucz not in magazyn:
+        magazyn[klucz] = [] # Inicjalizacja listy partii
+    
+    # Dodanie nowej partii (przyjęcia) do listy
+    magazyn[klucz].append(nowa_partia)
+    
+    st.success(f"Przyjęto nową partię: **{nazwa}** ({ilosc} szt. @ {cena:.2f} PLN) na pozycji **{lokalizacja}**.")
 
-    if klucz in magazyn:
-        magazyn[klucz] += ilosc
-        st.success(f"Zaktualizowano: Dodano **{ilosc}** sztuk towaru **{nazwa}** w **{lokalizacja}**. Nowa ilość: **{magazyn[klucz]}**.")
-    else:
-        magazyn[klucz] = ilosc
-        st.success(f"Nowy towar dodany: **{nazwa}** w ilości **{ilosc}** sztuk, na pozycji **{lokalizacja}**.")
 
-def usun_towar_z_ilosc_i_lokalizacja(klucz: Tuple[str, str], ilosc: int):
-    """Usuwa podaną ilość towaru z danej lokalizacji."""
+def usun_towar_z_lokalizacja(klucz: Tuple[str, str], ilosc_do_usuniecia: int):
+    """Usuwa podaną ilość towaru z danej lokalizacji (FIFO - Pierwsze Weszło, Pierwsze Wyszło)."""
     
     nazwa, lokalizacja = klucz
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
     
-    if ilosc <= 0:
+    if ilosc_do_usuniecia <= 0:
         st.error("Ilość do usunięcia musi być większa niż zero.")
         return
 
-    if klucz not in magazyn:
+    if klucz not in magazyn or not magazyn[klucz]:
         st.error(f"Towar **{nazwa}** na pozycji **{lokalizacja}** nie został znaleziony w magazynie.")
         return
 
-    obecna_ilosc = magazyn[klucz]
+    # Obliczenie sumy dostępnej ilości
+    dostepna_ilosc = sum(partia['ilosc'] for partia in magazyn[klucz])
+    
+    if ilosc_do_usuniecia > dostepna_ilosc:
+        st.error(f"Nie można wydać **{ilosc_do_usuniecia}** sztuk. Dostępnych jest tylko **{dostepna_ilosc}**.")
+        return
 
-    if ilosc >= obecna_ilosc:
+    pozostala_ilosc = ilosc_do_usuniecia
+    wydane_partie_info = []
+
+    # Iteracja przez partie (FIFO - usuwamy z listy od początku)
+    while pozostala_ilosc > 0 and magazyn[klucz]:
+        partia = magazyn[klucz][0] # Zawsze bierzemy pierwszą partię (FIFO)
+        
+        ilosc_partii = partia['ilosc']
+        cena_partii = partia['cena']
+        
+        if ilosc_partii <= pozostala_ilosc:
+            # Usuwamy całą partię
+            magazyn[klucz].pop(0) 
+            wydane_partie_info.append(f"{ilosc_partii} szt. @ {cena_partii:.2f} PLN")
+            pozostala_ilosc -= ilosc_partii
+        else:
+            # Usuwamy tylko część partii
+            partia['ilosc'] -= pozostala_ilosc
+            wydane_partie_info.append(f"{pozostala_ilosc} szt. @ {cena_partii:.2f} PLN")
+            pozostala_ilosc = 0 # Koniec usuwania
+
+    st.success(f"Wydano **{ilosc_do_usuniecia}** sztuk towaru **{nazwa}** z **{lokalizacja}** na podstawie partii: " + ", ".join(wydane_partie_info))
+    
+    # Jeśli lista partii jest pusta, usuwamy klucz z magazynu
+    if not magazyn[klucz]:
         del magazyn[klucz]
-        st.success(f"Usunięto cały zapas towaru **{nazwa}** z **{lokalizacja}** (usunięto **{obecna_ilosc}** sztuk).")
-    else:
-        magazyn[klucz] -= ilosc
-        st.success(f"Usunięto **{ilosc}** sztuk towaru **{nazwa}** z **{lokalizacja}**. Pozostało: **{magazyn[klucz]}**.")
 
 
 # --- Główny Interfejs Użytkownika Streamlit ---
 
-st.set_page_config(page_title="Magazyn z Wygasającą Sesją", layout="centered")
+st.set_page_config(page_title="Magazyn z Ceną i Wygasającą Sesją", layout="centered")
 
-# KROK 1: Inicjalizacja i Sprawdzenie Wygasania
 inicjalizuj_stan_sesji()
 sprawdz_wygasanie_sesji() 
 
 MAGAZYN = st.session_state[KLUCZ_MAGAZYNU]
 
-st.title("⏱️ Magazyn z Symulacją Wygasania Sesji")
-st.caption(f"Dane są utrzymywane dzięki `st.session_state`, ale resetują się po {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekundach bezczynności.")
+st.title("💸 Magazyn Partii z Cenami Jednostkowymi")
+st.caption(f"Aplikacja obsługuje magazynowanie w partiach (z różnymi cenami zakupu). Sesja wygasa po {CZAS_WYGASANIA_SEKCJI_SEKUNDY} sekundach bezczynności.")
 
 # --- Sekcja Dodawania Towaru ---
-st.header("➕ Dodaj / Przyjmij Towar")
+st.header("➕ Dodaj / Przyjmij Nową Partię")
 with st.form(key='dodawanie_form'):
     col1, col2 = st.columns(2)
     with col1:
@@ -121,34 +148,49 @@ with st.form(key='dodawanie_form'):
     with col2:
         lokalizacja_dodaj = st.text_input("Lokalizacja (np. Regał A01):", key="lokalizacja_dodaj")
 
-    ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
+    col3, col4 = st.columns(2)
+    with col3:
+        ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
+    with col4:
+        # Umożliwienie wprowadzania ceny z miejscami po przecinku
+        cena_dodaj = st.number_input("Cena jednostkowa (PLN):", min_value=0.01, value=100.00, step=0.01, key="cena_dodaj", format="%.2f")
 
-    submit_button_dodaj = st.form_submit_button("Dodaj / Przyjmij do Magazynu")
+    submit_button_dodaj = st.form_submit_button("Przyjmij Nową Partię do Magazynu")
 
     if submit_button_dodaj:
-        dodaj_towar_z_ilosc_i_lokalizacja(nowy_towar, ilosc_dodaj, lokalizacja_dodaj)
+        dodaj_towar_z_partia(nowy_towar, ilosc_dodaj, lokalizacja_dodaj, cena_dodaj)
 
 
 # --- Sekcja Usuwania Towaru ---
-st.header("➖ Usuń / Wydaj Towar")
+st.header("➖ Usuń / Wydaj Towar (FIFO)")
 if MAGAZYN:
     with st.form(key='usuwanie_form'):
         
-        dostepne_klucze_sorted = sorted(MAGAZYN.keys())
-        opcje_do_wyboru = [
-            f"{nazwa} | {lokalizacja} ({ilosc} szt.)"
-            for (nazwa, lokalizacja), ilosc in MAGAZYN.items()
-        ]
+        # 1. Przygotowanie opcji wyboru (towar + lokalizacja)
+        dostepne_klucze = sorted(MAGAZYN.keys())
         
+        # Tworzenie czytelnych opcji zsumowanych z listy partii
+        opcje_do_wyboru = []
+        suma_ilosci = {}
+        for (nazwa, lokalizacja), partie in MAGAZYN.items():
+            ilosc_sumaryczna = sum(p['ilosc'] for p in partie)
+            suma_ilosci[(nazwa, lokalizacja)] = ilosc_sumaryczna
+            opcje_do_wyboru.append(f"{nazwa} | {lokalizacja} (SUMA: {ilosc_sumaryczna} szt.)")
+        
+        if not opcje_do_wyboru:
+            st.info("Brak towaru w magazynie.")
+            st.stop()
+
+        # Wybór pozycji
         indeks_wyboru = st.selectbox(
-            "Wybierz pozycję do wydania:",
+            "Wybierz pozycję do wydania (Nazwa i Lokalizacja):",
             options=range(len(opcje_do_wyboru)),
             format_func=lambda i: opcje_do_wyboru[i], 
             key="select_usun"
         )
         
-        klucz_do_usunięcia = dostepne_klucze_sorted[indeks_wyboru]
-        max_ilosc = MAGAZYN.get(klucz_do_usunięcia, 1)
+        klucz_do_usunięcia = dostepne_klucze[indeks_wyboru]
+        max_ilosc = suma_ilosci.get(klucz_do_usunięcia, 1)
 
         ilosc_usun = st.number_input(
             f"Ilość sztuk do wydania (Max: {max_ilosc}):",
@@ -162,25 +204,31 @@ if MAGAZYN:
         submit_button_usun = st.form_submit_button("Usuń / Wydaj z Magazynu")
 
         if submit_button_usun:
-            usun_towar_z_ilosc_i_lokalizacja(klucz_do_usunięcia, ilosc_usun)
+            usun_towar_z_lokalizacja(klucz_do_usunięcia, ilosc_usun)
 else:
     st.info("Magazyn jest pusty, nic do usunięcia.")
 
 
-# --- Sekcja Aktualnego Stanu Magazynu ---
-st.header("📊 Aktualny Stan Magazynu")
+# --- Sekcja Aktualnego Stanu Magazynu (Szczegółowo) ---
+st.header("📊 Szczegółowy Stan Magazynu (Partie)")
 
 if MAGAZYN:
-    st.write(f"Liczba unikalnych pozycji: **{len(MAGAZYN)}**")
+    wszystkie_dane_tabela = []
     
-    dane_tabela = [
-        {"Nazwa Towaru": nazwa, "Lokalizacja": lokalizacja, "Ilość Sztuk": ilosc} 
-        for (nazwa, lokalizacja), ilosc in sorted(MAGAZYN.items())
-    ]
-    
-    st.dataframe(dane_tabela, hide_index=True)
+    # Przetwarzanie słownika MAGAZYN na czytelną listę słowników dla DataFrame
+    for (nazwa, lokalizacja), partie in sorted(MAGAZYN.items()):
+        for partia in partie:
+            wszystkie_dane_tabela.append({
+                "Nazwa Towaru": nazwa,
+                "Lokalizacja": lokalizacja,
+                "Ilość Sztuk": partia['ilosc'],
+                "Cena Jednostkowa (PLN)": f"{partia['cena']:.2f}",
+                "Wartość Partii (PLN)": f"{partia['ilosc'] * partia['cena']:.2f}"
+            })
+
+    st.dataframe(wszystkie_dane_tabela, hide_index=True)
 else:
     st.info("Magazyn jest obecnie pusty.")
 
 st.markdown("---")
-st.info("💡 **Działanie:** Każda interakcja z aplikacją (np. naciśnięcie przycisku, zmiana pola) resetuje licznik braku aktywności. Jeśli upłynie 120 sekund bez interakcji, dane zostaną usunięte.")
+st.info("💡 **Działanie:** Wydawanie towaru odbywa się metodą **FIFO** (First-In, First-Out), co oznacza, że najpierw wydawane są towary z partii przyjętej najwcześniej.")
