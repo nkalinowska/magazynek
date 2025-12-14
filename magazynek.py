@@ -67,19 +67,18 @@ def dodaj_towar_z_partia(nazwa: str, ilosc: int, lokalizacja: str, cena: float):
     klucz = (nazwa, lokalizacja)
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
     
-    nowa_partia = {'ilosc': ilosc, 'cena': round(cena, 2)} # Zaokrąglenie ceny
+    nowa_partia = {'ilosc': ilosc, 'cena': round(cena, 2)}
     
     if klucz not in magazyn:
-        magazyn[klucz] = [] # Inicjalizacja listy partii
+        magazyn[klucz] = []
     
-    # Dodanie nowej partii (przyjęcia) do listy
     magazyn[klucz].append(nowa_partia)
     
     st.success(f"Przyjęto nową partię: **{nazwa}** ({ilosc} szt. @ {cena:.2f} PLN) na pozycji **{lokalizacja}**.")
 
 
 def usun_towar_z_lokalizacja(klucz: Tuple[str, str], ilosc_do_usuniecia: int):
-    """Usuwa podaną ilość towaru z danej lokalizacji (FIFO - Pierwsze Weszło, Pierwsze Wyszło)."""
+    """Usuwa podaną ilość towaru z danej lokalizacji (FIFO)."""
     
     nazwa, lokalizacja = klucz
     magazyn = st.session_state[KLUCZ_MAGAZYNU]
@@ -152,7 +151,6 @@ with st.form(key='dodawanie_form'):
     with col3:
         ilosc_dodaj = st.number_input("Ilość sztuk:", min_value=1, value=1, step=1, key="ilosc_dodaj")
     with col4:
-        # Umożliwienie wprowadzania ceny z miejscami po przecinku
         cena_dodaj = st.number_input("Cena jednostkowa (PLN):", min_value=0.01, value=100.00, step=0.01, key="cena_dodaj", format="%.2f")
 
     submit_button_dodaj = st.form_submit_button("Przyjmij Nową Partię do Magazynu")
@@ -164,32 +162,40 @@ with st.form(key='dodawanie_form'):
 # --- Sekcja Usuwania Towaru ---
 st.header("➖ Usuń / Wydaj Towar (FIFO)")
 if MAGAZYN:
+    
+    # 1. Przygotowanie kluczy i opcji do wyboru
+    dostepne_klucze = sorted(MAGAZYN.keys())
+    opcje_do_wyboru = []
+    # Tworzymy słownik mapujący czytelną nazwę na faktyczny klucz (nazwa, lokalizacja)
+    nazwa_do_klucza_map = {}
+    
+    # Obliczamy sumy ilości, które będą wyświetlane w selectbox
+    suma_ilosci = {} 
+    for (nazwa, lokalizacja), partie in MAGAZYN.items():
+        ilosc_sumaryczna = sum(p['ilosc'] for p in partie)
+        if ilosc_sumaryczna > 0:
+            czytelna_opcja = f"{nazwa} | {lokalizacja} (SUMA: {ilosc_sumaryczna} szt.)"
+            opcje_do_wyboru.append(czytelna_opcja)
+            nazwa_do_klucza_map[czytelna_opcja] = (nazwa, lokalizacja)
+            suma_ilosci[(nazwa, lokalizacja)] = ilosc_sumaryczna
+
+    if not opcje_do_wyboru:
+        st.info("Brak towaru w magazynie.")
+        st.stop()
+
     with st.form(key='usuwanie_form'):
         
-        # 1. Przygotowanie opcji wyboru (towar + lokalizacja)
-        dostepne_klucze = sorted(MAGAZYN.keys())
-        
-        # Tworzenie czytelnych opcji zsumowanych z listy partii
-        opcje_do_wyboru = []
-        suma_ilosci = {}
-        for (nazwa, lokalizacja), partie in MAGAZYN.items():
-            ilosc_sumaryczna = sum(p['ilosc'] for p in partie)
-            suma_ilosci[(nazwa, lokalizacja)] = ilosc_sumaryczna
-            opcje_do_wyboru.append(f"{nazwa} | {lokalizacja} (SUMA: {ilosc_sumaryczna} szt.)")
-        
-        if not opcje_do_wyboru:
-            st.info("Brak towaru w magazynie.")
-            st.stop()
-
         # Wybór pozycji
-        indeks_wyboru = st.selectbox(
+        wybrana_opcja = st.selectbox(
             "Wybierz pozycję do wydania (Nazwa i Lokalizacja):",
-            options=range(len(opcje_do_wyboru)),
-            format_func=lambda i: opcje_do_wyboru[i], 
+            options=opcje_do_wyboru, # Streamlit użyje tekstowej reprezentacji
             key="select_usun"
         )
         
-        klucz_do_usunięcia = dostepne_klucze[indeks_wyboru]
+        # *** TUTAJ JEST POPRAWKA: Pobieramy faktyczny klucz z mapowania ***
+        klucz_do_usunięcia = nazwa_do_klucza_map[wybrana_opcja]
+        
+        # Używamy pobranego klucza do znalezienia maksymalnej ilości
         max_ilosc = suma_ilosci.get(klucz_do_usunięcia, 1)
 
         ilosc_usun = st.number_input(
@@ -212,10 +218,10 @@ else:
 # --- Sekcja Aktualnego Stanu Magazynu (Szczegółowo) ---
 st.header("📊 Szczegółowy Stan Magazynu (Partie)")
 
+
 if MAGAZYN:
     wszystkie_dane_tabela = []
     
-    # Przetwarzanie słownika MAGAZYN na czytelną listę słowników dla DataFrame
     for (nazwa, lokalizacja), partie in sorted(MAGAZYN.items()):
         for partia in partie:
             wszystkie_dane_tabela.append({
